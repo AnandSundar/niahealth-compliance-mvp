@@ -1,0 +1,43 @@
+###############################################################################
+# infra/.github/CODEOWNERS
+#
+# GitHub CODEOWNERS file. Defines who must approve a PR before it
+# can merge. The pattern is "later match wins" -- the most specific
+# rule at the bottom of the file overrides the more general ones
+# above it.
+#
+# Reviewer placeholders: the @niahealth-* team handles are
+# placeholders the team will create in the GitHub UI:
+#   - @niahealth-security  -- security review (IAM, KMS, WAF, OIDC)
+#   - @niahealth-eng       -- engineering review (workflows, modules)
+#   - @niahealth-compliance-- compliance review (controls, policies)
+# The user's personal handle @AnandSundar is the default owner for
+# everything; the team handles layer specific responsibilities on
+# top of that.
+#
+# The `apply.yml` workflow requires 2 reviewers (security + eng).
+# This is the last-line defense against a malicious or accidental
+# change to the production-apply path.
+###############################################################################
+
+# Default: every change in the repo requires a review from the
+# project owner. Team handles add layered review on top of this.
+*                                                       @AnandSundar
+
+# Identity and observability modules touch IAM roles, CloudTrail,
+# and GuardDuty/Config. These are the highest-blast-radius
+# resources; require an explicit security review.
+infra/modules/identity/                                  @niahealth-security
+infra/modules/observability/                             @niahealth-security
+
+# Apply workflow: changes here can drive a production apply.
+# Require BOTH security and engineering review -- two pairs of
+# eyes on the single most powerful file in the repo.
+infra/.github/workflows/apply.yml                        @niahealth-security @niahealth-eng
+
+# Plan workflow: one engineering reviewer is sufficient.
+infra/.github/workflows/plan.yml                         @niahealth-eng
+
+# Policy changes (Checkov, OPA, tflint) need a compliance review
+# because they encode the control matrix.
+infra/policies/                                          @niahealth-compliance

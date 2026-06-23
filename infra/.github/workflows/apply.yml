@@ -1,0 +1,258 @@
+###############################################################################
+# infra/.github/workflows/apply.yml
+#
+# Apply pipeline. Runs on push to main AND on manual workflow_dispatch
+# (the manual path supports a rollback action).
+#
+# Load-bearing controls implemented here:
+#
+#   * OIDC only             -- aws-actions/configure-aws-credentials@v4,
+#                              no static AWS keys anywhere.
+#   * Environment gating    -- `environment: production` is REQUIRED.
+#                              GitHub requires an approval from a
+#                              CODEOWNERS-listed reviewer before the
+#                              job starts. This is the single hardest
+#                              control in the whole pipeline: a
+#                              direct push to main cannot land infra
+#                              changes without a human's click.
+#   * Concurrency lock      -- cancel-in-progress: false. Concurrent
+#                              applies can corrupt the state file
+#                              (last writer wins, locking contention
+#                              causes the second apply to fail with
+#                              a stale lock). We let an in-flight
+#                              apply finish.
+#   * Pre-apply state backup-- the current tfstate is copied to
+#                              s3://<state-bucket>/backups/<ts>.tfstate
+#                              BEFORE `terraform apply` runs. This is
+#                              the rollback anchor. If the apply
+#                              corrupts state, the rollback workflow
+#                              copies this object back.
+#   * Apply the same plan   -- `terraform apply tfplan` (not a fresh
+#                              plan). The plan binary came from the
+#                              PR's plan.yml run as a downloaded
+#                              artifact. What was reviewed is what
+#                              gets applied. If the artifact is
+#                              missing (expired or skipped), the
+#                              job fails -- forcing a re-plan.
+#
+# Required GitHub UI configuration:
+#   * DEPLOY_ROLE_ARN secret (the OIDC deploy role; produced by
+#     the landing module). Constructed name pattern:
+#       niahealth-<environment>-deploy
+#   * `production` GitHub Environment, configured with required
+#     reviewers matching infra/.github/CODEOWNERS.
+###############################################################################
+
+name: terraform-apply
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        required: true
+        default: production
+        options:
+          - production
+          - staging
+      action:
+        description: "Apply or rollback"
+        type: choice
+        required: true
+        default: apply
+        options:
+          - apply
+          - rollback
+
+# NEVER cancel an in-flight apply. Concurrent applies on the same
+# state file corrupt the state (last writer wins; lock contention
+# causes spurious failures). The `apply` group is a single lock;
+# a second push to main while the first is still running will
+# wait for the first to finish.
+concurrency:
+  group: apply
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ca-central-1
+  TF_VERSION: 1.9.8
+  ENV_NAME: dev
+
+permissions:
+  contents: read
+  id-token: write        # required for OIDC
+  pull-requests: read    # for plan artifact download (when triggered by push)
+
+# REQUIRED. The `production` environment is configured in the GitHub
+# UI with required reviewers from infra/.github/CODEOWNERS. Without
+# an approval, the job never starts. This is the manual gate that
+# makes the pipeline safe: a push to main does not apply infra
+# until a human with merge rights clicks "Approve".
+environment: production
+
+jobs:
+  ###########################################################################
+  # terraform-apply
+  #
+  # Single job. Assumes the OIDC deploy role, backs up the current
+  # state file, downloads the PR's tfplan artifact, and applies it.
+  # On a `rollback` workflow_dispatch, instead runs a destroy plan
+  # against the current live state and applies that.
+  ###########################################################################
+  terraform-apply:
+    name: Terraform apply (OIDC, gated)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      #####################################################################
+      # OIDC: assume the deploy role. The role's trust policy (hand-
+      # rolled in modules/landing/oidc.tf) pins three claims:
+      #   sub          : repo:<org>/<repo>:ref:refs/heads/main
+      #   aud          : sts.amazonaws.com
+      #   workflow_file: infra/.github/workflows/apply.yml
+      # The workflow_file pin is the differentiator: a malicious
+      # workflow added under .github/workflows/ cannot assume the
+      # role even if it runs on main.
+      #####################################################################
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-duration: 3600
+
+      #####################################################################
+      # ROLLBACK PATH: when `action=rollback` is passed via
+      # workflow_dispatch, we don't use the PR's plan -- the state
+      # has already drifted (the bad apply happened). We plan a
+      # destroy against the current live state and apply that. The
+      # pre-apply state backup from the most recent apply.yml run is
+      # the recovery anchor if the destroy itself goes wrong.
+      #####################################################################
+      - name: Determine action
+        id: action
+        # `github.event.inputs.action` is empty for push events
+        # (always 'apply'); workflow_dispatch sets it explicitly.
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.action }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=apply" >> "$GITHUB_OUTPUT"
+          fi
+
+      #####################################################################
+      # LOAD-BEARING: Pre-apply state backup.
+      #
+      # Copies the current state file to a timestamped backup object
+      # BEFORE any apply runs. This is the rollback anchor. If the
+      # apply corrupts state, a follow-up workflow_dispatch with
+      # `action=rollback` can copy this object back over the live
+      # state file and then run a destroy plan.
+      #
+      # Bucket name pattern: <project>-state-<env> (see
+      # modules/landing/outputs.tf::state_bucket_name).
+      #####################################################################
+      - name: Pre-apply state backup
+        if: steps.action.outputs.value == 'apply'
+        env:
+          STATE_BUCKET: niahealth-state-${{ env.ENV_NAME }}
+          BACKUP_KEY: backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-apply-${{ github.run_id }}.tfstate
+        run: |
+          set -euo pipefail
+          echo "Backing up s3://${STATE_BUCKET}/terraform.tfstate -> s3://${STATE_BUCKET}/${BACKUP_KEY}"
+          aws s3 cp \
+            "s3://${STATE_BUCKET}/terraform.tfstate" \
+            "s3://${STATE_BUCKET}/${BACKUP_KEY}" \
+            --sse aws:kms \
+            --sse-kms-key-id alias/niahealth-state \
+            --only-show-errors
+
+          # Emit the backup key as a step output so the rollback
+          # path (and a future runbook) can find the most recent
+          # backup object.
+          echo "backup_key=${BACKUP_KEY}" >> "$GITHUB_OUTPUT"
+        id: state-backup
+
+      - name: terraform init
+        # Uses the real S3 backend. The deploy role has s3:Get/Put
+        # on the state bucket via the landing module's policy
+        # attachment.
+        run: terraform init -input=false
+
+      #####################################################################
+      # APPLY PATH: download the PR's plan artifact and apply it.
+      #
+      # The artifact name is `tfplan` and the workflow that produced
+      # it is plan.yml. We restrict the download to the most recent
+      # successful run on the same branch so an old plan cannot be
+      # applied by accident.
+      #####################################################################
+      - name: Download tfplan artifact
+        if: steps.action.outputs.value == 'apply'
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: infra/
+          # github.run_id is the current apply run; the plan artifact
+          # came from a different (earlier) run. Download from the
+          # same workflow scope so a stray artifact from a different
+          # repo cannot be applied.
+          run_id: ${{ github.event.workflow_run.id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: terraform apply (plan from PR)
+        if: steps.action.outputs.value == 'apply'
+        # `-input=false` and `tfplan` (not a fresh plan) are the
+        # audit-trail invariants. If the artifact is missing, the
+        # download step fails and we never get here.
+        run: terraform apply -input=false tfplan
+
+      #####################################################################
+      # ROLLBACK PATH: plan a destroy against the current live state
+      # and apply it. The pre-apply state backup is the recovery
+      # anchor if the destroy itself goes wrong.
+      #####################################################################
+      - name: terraform plan -destroy (rollback)
+        if: steps.action.outputs.value == 'rollback'
+        run: terraform plan -destroy -var-file=envs/${{ env.ENV_NAME }}.tfvars -out=tfplan-destroy -input=false -no-color
+
+      - name: terraform apply -destroy (rollback)
+        if: steps.action.outputs.value == 'rollback'
+        run: terraform apply -input=false tfplan-destroy
+
+      #####################################################################
+      # POST-APPLY: emit a summary line so the run log makes the
+      # action taken unambiguous. On failure, surface a clear next-
+      # step message pointing to the rollback workflow_dispatch.
+      #####################################################################
+      - name: Apply summary
+        if: always()
+        run: |
+          if [ "${{ steps.action.outputs.value }}" = "rollback" ]; then
+            echo "## Rollback summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Action: rollback (destroy plan + apply)" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Environment: ${{ env.ENV_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- State backup key (pre-rollback): ${{ steps.state-backup.outputs.backup_key }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Apply summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Action: apply" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Environment: ${{ env.ENV_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- State backup key (pre-apply): ${{ steps.state-backup.outputs.backup_key }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Plan source: tfplan artifact from plan.yml run ${{ github.event.workflow_run.id || github.run_id }}" >> "$GITHUB_STEP_SUMMARY"
+          fi

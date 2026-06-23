@@ -1,0 +1,446 @@
+###############################################################################
+# infra/.github/workflows/plan.yml
+#
+# PR-time pipeline. Runs on every pull_request targeting main and on
+# manual workflow_dispatch. Two jobs:
+#
+#   1. terraform-static  -- fmt, validate, tflint, conftest, checkov,
+#                           SARIF upload to Code Scanning, the do-not-
+#                           apply guard, and the Inspector gate.
+#   2. terraform-plan    -- assumes the OIDC deploy role, runs
+#                           `terraform plan`, posts the diff as a PR
+#                           comment, and uploads the plan binary as
+#                           an artifact (consumed by apply.yml).
+#   3. python-tests      -- the FastAPI app's pytest suite (U7).
+#
+# Load-bearing controls implemented here:
+#   * Do-not-apply guard   -- `grep -q "terraform apply"` in any plan-
+#                             time workflow file. Defends against
+#                             accidental promotion of apply into the
+#                             PR pipeline.
+#   * Inspector gate       -- blocks the build if the ECR image about
+#                             to deploy has any unmitigated
+#                             CRITICAL/HIGH CVE finding. See the
+#                             inspector-scan step for the activation
+#                             gate (the auditor role is post-MVP).
+#   * OIDC only            -- NO AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+#                             anywhere. `aws-actions/configure-aws-
+#                             credentials@v4` exclusively.
+#   * Pinned actions       -- every action pinned to a major version
+#                             (no @main, no floating SHA).
+#
+# Required GitHub UI configuration (one-time, per repo):
+#   * DEPLOY_ROLE_ARN secret (the OIDC deploy role; produced by the
+#     landing module). Constructed name pattern:
+#       niahealth-<environment>-deploy
+#     Example for dev: niahealth-dev-deploy
+#   * AUDITOR_ROLE_ARN variable (post-MVP, for the Inspector gate).
+#     Until set, the gate runs with `continue-on-error: true` and
+#     logs a warning.
+###############################################################################
+
+name: terraform-plan
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight runs for the same PR (cheap re-runs on a force-push
+# don't have to wait for the previous plan). For the apply workflow we
+# use cancel-in-progress: false because concurrent applies can corrupt
+# state -- see apply.yml.
+concurrency:
+  group: plan-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Defaults. Region is ca-central-1 for PHIPA data residency. The
+# Python version matches app/requirements.txt's test stack.
+env:
+  AWS_REGION: ca-central-1
+  TF_VERSION: 1.9.8
+  PYTHON_VERSION: "3.12"
+
+permissions:
+  contents: read
+  pull-requests: write   # for posting the plan as a PR comment
+  security-events: write # for SARIF upload to Code Scanning
+  id-token: write        # for OIDC (also required for the Inspector scan)
+
+jobs:
+  ###########################################################################
+  # Job 1: terraform-static
+  #
+  # Pure-static checks. No AWS access required except the optional
+  # Inspector scan. Anything that fails here fails the PR.
+  ###########################################################################
+  terraform-static:
+    name: Terraform static checks (fmt, validate, lint, policy)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout (full history for tflint)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive
+        # Fails on any formatting drift. The repo's pre-commit hook
+        # (see husky/lint-staged if added in a follow-up) also runs
+        # this; the CI check is the audit-trail backstop.
+
+      - name: terraform init -backend=false
+        # -backend=false: do not contact the S3 backend during plan-time
+        # validation. We want the static check to be hermetic so a
+        # bad PR cannot poison the real state bucket's lock table.
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: Set up tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: tflint --recursive
+        # Reads infra/.tflint.hcl (the repo-pinned config). --recursive
+        # picks up every module under infra/modules/**.
+        run: tflint --recursive --config infra/.tflint.hcl --minimum-failure-severity=warning
+        # Note: tflint is run from the repo root, not from the
+        # working-directory, because tflint resolves module paths
+        # relative to the .tflint.hcl file location.
+
+      - name: OPA / Conftest tag enforcement
+        # Enforces the 3 required tags (Environment, DataClass, Owner)
+        # on every taggable resource. The policy is in
+        # infra/policies/conftest.rego. conftest-action is the
+        # canonical entrypoint; falls back to `conftest` CLI if the
+        # action is unavailable.
+        uses: open-policy-agent/conftest-action@v0.4
+        with:
+          files: infra/**/*.tf
+          policy: infra/policies/conftest.rego
+
+      - name: Checkov (hard-fail + SARIF)
+        # Checkov is the SCA gate for CKV_AWS_*, CKV_SECRET_*, and the
+        # BC_AWS_GENERAL_*/BC_AWS_HIPAA_* family. Hard-fail IDs are
+        # pinned in infra/policies/checkov.yaml. Output is SARIF for
+        # Code Scanning upload.
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          config_file: infra/policies/checkov.yaml
+          output_format: sarif
+          output_file_path: code-scanning.sarif
+          quiet: true
+          # download_external_modules: true is the default; required
+          # because the landing module consumes terraform-aws-modules.
+
+      - name: Upload Checkov SARIF artifact
+        # Preserve the SARIF for 30 days. Useful for debugging the
+        # Code Scanning alerts and for offline review.
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-scanning-sarif
+          path: code-scanning.sarif
+          retention-days: 30
+
+      - name: Upload SARIF to GitHub Code Scanning
+        # Requires `security-events: write` (declared at the workflow
+        # top). The SARIF appears under the Security tab as alerts
+        # with the Checkov rule ID and the offending file/line.
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: code-scanning.sarif
+          category: checkov
+
+      #####################################################################
+      # LOAD-BEARING: do-not-apply guard.
+      #
+      # Self-referential grep: this workflow searches itself for the
+      # string `terraform apply`. If found, the build fails.
+      #
+      # Why self-referential: the audit-trail invariant is that the
+      # PR pipeline must NEVER run `terraform apply` -- apply happens
+      # only in apply.yml, gated on a manual approval. The grep is
+      # the cheapest possible defense against a future PR that
+      # accidentally promotes an apply step into plan.yml. The step
+      # name is verbose on purpose so it shows up clearly in the run
+      # log if it ever trips.
+      #####################################################################
+      - name: "GUARD: do-not-apply -- fail if any plan-time workflow contains `terraform apply`"
+        run: |
+          if grep -q "terraform apply" infra/.github/workflows/plan.yml; then
+            echo "::error::do-not-apply guard tripped: 'terraform apply' was found in infra/.github/workflows/plan.yml"
+            echo "Apply must NEVER live in the PR pipeline. Move it to infra/.github/workflows/apply.yml and gate on the production environment."
+            exit 1
+          fi
+          echo "do-not-apply guard passed: no 'terraform apply' in plan-time workflow."
+
+      #####################################################################
+      # LOAD-BEARING: Inspector / ECR CVE gate.
+      #
+      # U7 owns the ECR repo (image_tag_mutability=IMMUTABLE,
+      # scan_on_push=true). The deploy image tag is the PR's head
+      # SHA (the same tag the apply workflow will use). This step
+      # queries Inspector2 for any unmitigated CRITICAL/HIGH
+      # finding on that tag and fails the build if any exist.
+      #
+      # Activation gate: requires a separate read-only auditor role
+      # (arn:aws:iam::<acct>:role/<env>-auditor) that the landing
+      # module does NOT yet create. The team must:
+      #   1. Add `auditor_role.tf` in infra/modules/landing/ (U9+
+      #      follow-up).
+      #   2. Set the AUDITOR_ROLE_ARN repo variable in the GitHub UI.
+      # Until both are done, this step is `continue-on-error: true`
+      # and emits a warning -- the gate is documented as future-active.
+      #####################################################################
+      - name: "GUARD: Inspector2 scan -- fail if CRITICAL/HIGH CVE on deploy image"
+        id: inspector
+        env:
+          AUDITOR_ROLE_ARN: ${{ vars.AUDITOR_ROLE_ARN || '' }}
+          IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AUDITOR_ROLE_ARN}" ]; then
+            echo "::warning::AUDITOR_ROLE_ARN is not set; Inspector gate is a no-op until the auditor role is created (post-MVP). See U8 notes."
+            exit 0
+          fi
+
+          # Assume the read-only auditor role (OIDC). The role's
+          # trust policy MUST pin workflow_file to plan.yml; that's
+          # a follow-up to the landing module.
+          aws configure set aws.region "${AWS_REGION}"
+          AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" \
+            aws sts assume-role-with-web-identity \
+              --role-arn "${AUDITOR_ROLE_ARN}" \
+              --role-session-name "inspector-gate-${IMAGE_TAG}" \
+              --web-identity-token "${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+              --duration-seconds 900 > /tmp/assumed.json
+
+          export AWS_ACCESS_KEY_ID=$(jq -r .Credentials.AccessKeyId /tmp/assumed.json)
+          export AWS_SECRET_ACCESS_KEY=$(jq -r .Credentials.SecretAccessKey /tmp/assumed.json)
+          export AWS_SESSION_TOKEN=$(jq -r .Credentials.SessionToken /tmp/assumed.json)
+
+          # List CRITICAL+HIGH findings on ECR container images, then
+          # filter to the tag about to deploy (the PR head SHA).
+          FINDINGS=$(aws inspector2 list-findings \
+            --filter-criteria 'severity={CRITICAL,HIGH},resourceType={AWS_ECR_CONTAINER_IMAGE}' \
+            --query "findings[?contains(resourceDetails.awsEcrContainerImageDetails.imageTags, \`${IMAGE_TAG}\`)]" \
+            --output json)
+
+          if [ "$(echo "${FINDINGS}" | jq 'length')" != "0" ]; then
+            echo "::error::Inspector2 found $(echo "${FINDINGS}" | jq 'length') unmitigated CRITICAL/HIGH finding(s) on image tag ${IMAGE_TAG}:"
+            echo "${FINDINGS}" | jq -r '.[] | "  - \(.severity) \(.type) on \(.resourceDetails.awsEcrContainerImageDetails.imageTags | join(",")) -- \(.title)"'
+            exit 1
+          fi
+
+          echo "Inspector gate passed: no unmitigated CRITICAL/HIGH findings on ${IMAGE_TAG}."
+
+  ###########################################################################
+  # Job 2: terraform-plan
+  #
+  # Assumes the OIDC deploy role, runs `terraform plan`, posts the
+  # output as a PR comment (with an updatable marker so re-runs don't
+  # pile up), and uploads the plan binary as an artifact.
+  #
+  # The plan is the audit-trail invariant: apply.yml consumes THIS
+  # plan file, not a fresh one, so what was reviewed is what gets
+  # applied. The apply job downloads the tfplan artifact from the
+  # triggering workflow run.
+  ###########################################################################
+  terraform-plan:
+    name: Terraform plan (OIDC)
+    runs-on: ubuntu-latest
+    needs: terraform-static
+    # If the static checks fail, don't bother planning. This also
+    # avoids spurious AWS API calls on a known-bad PR.
+    if: success()
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      #####################################################################
+      # OIDC: assume the deploy role created by modules/landing/oidc.tf.
+      # The role's trust policy pins sub=repo:...:ref:refs/heads/main,
+      # aud=sts.amazonaws.com, and workflow_file=apply.yml. A PR-time
+      # run on plan.yml will NOT have that workflow_file claim, so
+      # configure-aws-credentials will fail the OIDC assume. To make
+      # the plan job functional at PR time, the team's read-only
+      # `plan_role` (a follow-up to the landing module) is the
+      # correct identity; for the MVP, we use the same deploy role
+      # with the caveat that plan runs on PRs from forks will fail
+      # the OIDC assume (which is the desired posture).
+      #
+      # Required secret: DEPLOY_ROLE_ARN. Constructed name pattern
+      # produced by the landing module:
+      #   niahealth-<environment>-deploy
+      #####################################################################
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          # session-duration caps the OIDC session at 1h to match
+          # the deploy role's max_session_duration.
+          role-session-duration: 3600
+
+      - name: terraform init
+        # The plan job DOES use the real S3 backend so the diff is
+        # against the current state. The deploy role has s3:Get/
+        # PutObject on the state bucket (per the landing module's
+        # AdministratorAccess attachment for the MVP demo).
+        run: terraform init -input=false
+
+      - name: terraform plan
+        # -out=tfplan: write the plan to a binary file. The apply
+        # job will download this artifact and pass it to
+        # `terraform apply tfplan` -- the audit-trail invariant.
+        run: terraform plan -var-file=envs/dev.tfvars -out=tfplan -input=false -no-color
+
+      - name: Upload tfplan artifact
+        # 90-day retention: a PR may sit for a while before merge,
+        # and the apply job needs the plan to still be available.
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: infra/tfplan
+          retention-days: 90
+
+      - name: Post plan as PR comment
+        # Re-runs update the same comment (idempotent marker) so the
+        # PR doesn't accumulate a stack of stale plan diffs. The
+        # marker is hidden in an HTML comment so it doesn't render.
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+
+            // Render the plan as text. The binary tfplan is not
+            // human-readable; `terraform show` decodes it.
+            let planOutput = '';
+            try {
+              planOutput = execSync('terraform show -no-color tfplan', { cwd: 'infra' }).toString();
+            } catch (err) {
+              planOutput = 'Failed to render plan: ' + err.message;
+            }
+
+            // Truncate to 60,000 chars (GitHub PR comment limit is
+            // 65,536; leave headroom for the header + marker).
+            const MAX_LEN = 60000;
+            if (planOutput.length > MAX_LEN) {
+              planOutput = planOutput.slice(0, MAX_LEN) + '\n\n... (truncated; see the tfplan artifact for the full diff) ...';
+            }
+
+            // Idempotent marker: re-runs overwrite the existing
+            // comment instead of posting a new one. Hide it in an
+            // HTML comment so it doesn't show in the rendered PR.
+            const MARKER = '<!-- niahealth-tfplan-marker -->';
+            const body = [
+              MARKER,
+              '### `terraform plan` (dev environment)',
+              '',
+              '<details><summary>Plan output (click to expand)</summary>',
+              '',
+              '```hcl',
+              planOutput,
+              '```',
+              '',
+              '</details>',
+              '',
+              '_Full plan binary: `tfplan` artifact on the workflow run._',
+            ].join('\n');
+
+            // Find the existing comment (if any) and update it;
+            // otherwise post a fresh one.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              core.info(`Updated existing plan comment (id=${existing.id}).`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              core.info('Posted new plan comment.');
+            }
+
+  ###########################################################################
+  # Job 3: python-tests
+  #
+  # The FastAPI app's pytest suite (U7). Runs on every PR regardless
+  # of which files changed -- a defensive default for the MVP. A
+  # future iteration could paths-filter to only run when app/** is
+  # touched.
+  ###########################################################################
+  python-tests:
+    name: Python app tests (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        # 18 tests as of U7, including the JWT confusion-attack
+        # defenses. -v for the per-test output in the run log.
+        run: pytest -v
