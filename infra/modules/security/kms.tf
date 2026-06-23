@@ -61,6 +61,18 @@ variable "tags" {
   default     = {}
 }
 
+# ---------------------------------------------------------------------------
+# U4 input: the Lambda rotation function's execution role ARN. Owned
+# by the identity module and passed in by the root. Used as the
+# principal in the rds-master-password secret's resource policy so
+# the rotation Lambda can call secretsmanager:RotateSecret on it.
+# ---------------------------------------------------------------------------
+variable "lambda_rotation_role_arn" {
+  description = "ARN of the Lambda rotation function's execution role. Owned by the identity module and passed in by the root. Used as the principal in the secret's resource policy so the rotation Lambda can call secretsmanager:RotateSecret on it."
+  type        = string
+  default     = null
+}
+
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 

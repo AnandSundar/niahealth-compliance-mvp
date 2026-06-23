@@ -4,6 +4,10 @@
 # `landing` module (state bucket, OIDC provider, OIDC deploy role).
 # U3 adds the network plane (`networking`), the public edge
 # (`edge`), and the KMS key plane (`security`).
+# U4 adds the identity plane (`identity`): IAM Identity Center
+# permission sets, per-service IAM roles with permission boundaries,
+# the single break-glass IAM user, IAM Access Analyzer, Secrets
+# Manager secrets, and rotation.
 #
 # Module layout follows Anton Babenko's convention: each layer is a
 # self-contained subdirectory under modules/ with main/variables/
@@ -103,7 +107,11 @@ module "landing" {
 
 # ---------------------------------------------------------------------------
 # Security (U3): KMS CMKs for the data + audit + logs planes.
-# No upstream dependencies; can be applied first or in parallel.
+# U4 extends this module with Secrets Manager secrets (secrets.tf)
+# and rotation configuration (secrets-rotation.tf). The rotation
+# Lambda's execution role is owned by the identity module and
+# passed in below as `lambda_rotation_role_arn` (the security
+# module's rotation policy uses it as the principal).
 # ---------------------------------------------------------------------------
 module "security" {
   source = "./modules/security"
@@ -111,6 +119,11 @@ module "security" {
   region       = var.region
   environment  = var.environment
   project_name = var.project_name
+
+  # Forwarded from the identity module -- the rotation Lambda's
+  # execution role ARN. Null when the identity module is not yet
+  # wired (U4 fix-up).
+  lambda_rotation_role_arn = module.identity.lambda_rotation_role_arn
 
   tags = var.tags
 }
@@ -162,6 +175,44 @@ module "edge" {
   # ALB access logs will begin flowing.
   alb_access_logs_bucket = null
   alb_access_logs_prefix = "alb"
+
+  tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
+# Identity (U4): IAM Identity Center permission sets, per-service
+# IAM roles with permission boundaries, break-glass IAM user,
+# Access Analyzer. Depends on `landing` for the OIDC provider ARN
+# (used by the ECS task role's trust policy) and on `security`
+# for the 4 CMK ARNs (scoped into per-role permissions).
+# ---------------------------------------------------------------------------
+module "identity" {
+  source = "./modules/identity"
+
+  region       = var.region
+  environment  = var.environment
+  project_name = var.project_name
+
+  # OIDC provider ARN from the landing module. The ECS task
+  # role's trust policy references the federated principal of
+  # this provider when the task assumes downstream roles via
+  # web identity.
+  oidc_provider_arn = module.landing.oidc_provider_arn
+
+  # 4 CMK ARNs from the security module. Each role below scopes
+  # its kms:* permissions to ONE of these ARNs per key domain
+  # (RDS Proxy role -> rds_kms_key, ECS task role -> s3_phi_kms,
+  # Firehose role -> cloudtrail_kms, etc.).
+  rds_kms_key_arn        = module.security.rds_kms_key_arn
+  s3_phi_kms_key_arn     = module.security.s3_phi_kms_key_arn
+  cloudtrail_kms_key_arn = module.security.cloudtrail_kms_key_arn
+  cwl_kms_key_arn        = module.security.cwl_kms_key_arn
+
+  # Secret ARNs from the security module. The ECS task role +
+  # Lambda rotation role scope their secretsmanager:* permissions
+  # to these ARNs.
+  rds_master_password_secret_arn = module.security.rds_master_password_secret_arn
+  cognito_client_secret_arn      = module.security.cognito_client_secret_arn
 
   tags = var.tags
 }

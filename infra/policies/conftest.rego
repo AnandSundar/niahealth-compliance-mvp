@@ -42,7 +42,11 @@ required_tags := {"Environment", "DataClass", "Owner"}
 #
 # This list grows explicitly as new resource types enter the
 # codebase. U2 added the initial 22; U3 added the 7 below for the
-# network + edge plane (U3 plan call-out).
+# network + edge plane (U3 plan call-out); U4 added the 4 below
+# for the identity + secrets plane (IAM Access Analyzer, SNS
+# paging topic, EventBridge rule, SNS topic -- the
+# secretsmanager_secret + cloudwatch_log_group + iam_role + iam_policy
+# + iam_user types were already in the list from U2).
 taggable_resource_types := {
   "aws_iam_role",
   "aws_iam_policy",
@@ -74,6 +78,10 @@ taggable_resource_types := {
   "aws_ecs_task_definition",
   "aws_cognito_user_pool",
   "aws_secretsmanager_secret",
+  # U4 additions -- identity + secrets plane.
+  "aws_accessanalyzer_analyzer",
+  "aws_sns_topic",
+  "aws_cloudwatch_event_rule",
 }
 
 # Allowlist of resource types that genuinely do not support tags and
