@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 800" font-family="Helvetica, Arial, sans-serif" font-size="13">
+  <title>Network &amp; Edge Architecture - ca-central-1</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+    <marker id="arrowred" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c0392b"/>
+    </marker>
+    <style>
+      .label { font-weight: 600; }
+      .small { font-size: 11px; fill: #555; }
+      .box { fill: #fff; stroke: #2c3e50; stroke-width: 1.5; }
+      .vpc { fill: #ecf0f1; stroke: #34495e; stroke-width: 2; }
+      .az { fill: #fdfefe; stroke: #95a5a6; stroke-width: 1; stroke-dasharray: 4 2; }
+      .pub { fill: #fef9e7; stroke: #f39c12; stroke-width: 1; }
+      .priv { fill: #eafaf1; stroke: #27ae60; stroke-width: 1; }
+      .iso { fill: #fdedec; stroke: #c0392b; stroke-width: 1; }
+      .kms { fill: #f4ecf7; stroke: #8e44ad; stroke-width: 1; }
+      .endpoint { fill: #e8f8f5; stroke: #16a085; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <!-- Title -->
+  <text x="700" y="25" text-anchor="middle" font-size="18" font-weight="700" fill="#2c3e50">NiaHealth - Network &amp; Edge Architecture (ca-central-1)</text>
+  <text x="700" y="45" text-anchor="middle" class="small">Single AWS account, 3 AZs, no NAT for PHI paths, all PHI-bearing subnets isolated</text>
+
+  <!-- Internet -->
+  <rect x="50" y="80" width="160" height="60" rx="6" class="box"/>
+  <text x="130" y="105" text-anchor="middle" class="label">Patient / Clinician</text>
+  <text x="130" y="125" text-anchor="middle" class="small">HTTPS (TLS 1.3)</text>
+
+  <!-- WAFv2 -->
+  <rect x="270" y="80" width="160" height="60" rx="6" class="box" fill="#fef5e7" stroke="#d35400"/>
+  <text x="350" y="105" text-anchor="middle" class="label">WAFv2</text>
+  <text x="350" y="125" text-anchor="middle" class="small">AWS Managed Rules</text>
+
+  <!-- VPC box -->
+  <rect x="60" y="180" width="1280" height="580" rx="8" class="vpc"/>
+  <text x="80" y="205" font-weight="700" fill="#2c3e50">VPC: niahealth-vpc (ca-central-1) - 10.0.0.0/16</text>
+
+  <!-- Internet Gateway -->
+  <rect x="80" y="225" width="200" height="50" rx="6" class="box"/>
+  <text x="180" y="248" text-anchor="middle" class="label">Internet Gateway</text>
+  <text x="180" y="263" text-anchor="middle" class="small">Egress only (non-PHI)</text>
+
+  <!-- NAT Gateway -->
+  <rect x="320" y="225" width="200" height="50" rx="6" class="box" fill="#fef9e7" stroke="#f39c12"/>
+  <text x="420" y="248" text-anchor="middle" class="label">NAT Gateway</text>
+  <text x="420" y="263" text-anchor="middle" class="small">Public subnets only</text>
+
+  <!-- AZ1 Public subnet -->
+  <rect x="80" y="305" width="380" height="90" rx="6" class="pub"/>
+  <text x="100" y="325" font-weight="700" fill="#7d6608">Public Subnet 1a</text>
+  <text x="100" y="340" class="small">10.0.1.0/24</text>
+  <rect x="100" y="350" width="340" height="35" rx="4" fill="#fff" stroke="#7d6608"/>
+  <text x="270" y="372" text-anchor="middle" class="label">Application Load Balancer + ACM TLS</text>
+
+  <!-- AZ2 Public -->
+  <rect x="80" y="405" width="380" height="40" rx="6" class="pub"/>
+  <text x="100" y="425" font-weight="700" fill="#7d6608">Public Subnet 1b - 10.0.2.0/24 (ALB standby)</text>
+
+  <!-- AZ3 Public -->
+  <rect x="80" y="455" width="380" height="40" rx="6" class="pub"/>
+  <text x="100" y="475" font-weight="700" fill="#7d6608">Public Subnet 1c - 10.0.3.0/24 (ALB standby)</text>
+
+  <!-- AZ1 Private subnet -->
+  <rect x="490" y="305" width="430" height="90" rx="6" class="priv"/>
+  <text x="510" y="325" font-weight="700" fill="#196f3d">Private Subnet 1a</text>
+  <text x="510" y="340" class="small">10.0.10.0/24</text>
+  <rect x="510" y="350" width="400" height="35" rx="4" fill="#fff" stroke="#196f3d"/>
+  <text x="710" y="372" text-anchor="middle" class="label">ECS Fargate Tasks (compute)</text>
+
+  <!-- AZ2 Private -->
+  <rect x="490" y="405" width="430" height="40" rx="6" class="priv"/>
+  <text x="510" y="425" font-weight="700" fill="#196f3d">Private Subnet 1b - 10.0.11.0/24</text>
+
+  <!-- AZ3 Private -->
+  <rect x="490" y="455" width="430" height="40" rx="6" class="priv"/>
+  <text x="510" y="475" font-weight="700" fill="#196f3d">Private Subnet 1c - 10.0.12.0/24</text>
+
+  <!-- AZ1 Isolated -->
+  <rect x="940" y="305" width="380" height="90" rx="6" class="iso"/>
+  <text x="960" y="325" font-weight="700" fill="#922b21">Isolated Subnet 1a</text>
+  <text x="960" y="340" class="small">10.0.20.0/24</text>
+  <rect x="960" y="350" width="350" height="35" rx="4" fill="#fff" stroke="#922b21"/>
+  <text x="1135" y="372" text-anchor="middle" class="label">RDS Postgres (data plane)</text>
+
+  <!-- AZ2 Isolated -->
+  <rect x="940" y="405" width="380" height="40" rx="6" class="iso"/>
+  <text x="960" y="425" font-weight="700" fill="#922b21">Isolated Subnet 1b - 10.0.21.0/24</text>
+
+  <!-- AZ3 Isolated -->
+  <rect x="940" y="455" width="380" height="40" rx="6" class="iso"/>
+  <text x="960" y="475" font-weight="700" fill="#922b21">Isolated Subnet 1c - 10.0.22.0/24</text>
+
+  <!-- AZ labels row at top of subnets -->
+  <text x="270" y="295" text-anchor="middle" font-weight="700" fill="#7d6608">AZ ca-central-1a</text>
+  <text x="705" y="295" text-anchor="middle" font-weight="700" fill="#196f3d">AZ ca-central-1a</text>
+  <text x="1130" y="295" text-anchor="middle" font-weight="700" fill="#922b21">AZ ca-central-1a</text>
+
+  <!-- VPC Endpoints section -->
+  <rect x="80" y="520" width="1240" height="220" rx="6" class="endpoint"/>
+  <text x="100" y="542" font-weight="700" fill="#0e6655">VPC Endpoints (Interface, PrivateLink) - PHI never traverses NAT</text>
+  <text x="100" y="558" class="small">All endpoints in private subnets; security groups restrict to ECS task role</text>
+
+  <!-- Endpoint boxes -->
+  <g font-size="11">
+    <rect x="100" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="185" y="597" text-anchor="middle" class="label">S3</text>
+    <text x="185" y="615" text-anchor="middle" class="small">Gateway endpoint (free)</text>
+
+    <rect x="290" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="375" y="597" text-anchor="middle" class="label">KMS</text>
+    <text x="375" y="615" text-anchor="middle" class="small">Interface endpoint</text>
+
+    <rect x="480" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="565" y="597" text-anchor="middle" class="label">Secrets Manager</text>
+    <text x="565" y="615" text-anchor="middle" class="small">Interface endpoint</text>
+
+    <rect x="670" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="755" y="597" text-anchor="middle" class="label">ECR (api + dkr)</text>
+    <text x="755" y="615" text-anchor="middle" class="small">Interface endpoints</text>
+
+    <rect x="860" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="945" y="597" text-anchor="middle" class="label">CloudWatch Logs</text>
+    <text x="945" y="615" text-anchor="middle" class="small">Interface endpoint</text>
+
+    <rect x="1050" y="575" width="170" height="55" rx="4" fill="#fff" stroke="#16a085"/>
+    <text x="1135" y="597" text-anchor="middle" class="label">Monitoring</text>
+    <text x="1135" y="615" text-anchor="middle" class="small">Interface endpoint</text>
+  </g>
+
+  <!-- Conftest assertion note -->
+  <rect x="100" y="650" width="500" height="75" rx="4" fill="#fff" stroke="#16a085"/>
+  <text x="115" y="672" class="label" fill="#0e6655">Conftest policy (OPA):</text>
+  <text x="115" y="690" class="small">No PHI-bearing security group may have a route table</text>
+  <text x="115" y="705" class="small">with 0.0.0.0/0 -&gt; NAT. Enforced in plan.yml.</text>
+
+  <!-- KMS CMKs -->
+  <rect x="620" y="650" width="680" height="75" rx="4" class="kms"/>
+  <text x="640" y="672" class="label" fill="#6c3483">KMS Customer-Managed CMKs (annual rotation, deny delete)</text>
+  <g font-size="11">
+    <text x="640" y="692" class="small">- rds_kms_key (RDS at-rest + snapshots)</text>
+    <text x="640" y="707" class="small">- s3_phi_kms_key (data-tier bucket + app uploads)</text>
+    <text x="900" y="692" class="small">- cloudtrail_kms_key (audit trail)</text>
+    <text x="900" y="707" class="small">- cwl_kms_key (CloudWatch Logs)</text>
+  </g>
+
+  <!-- Edges -->
+  <line x1="210" y1="110" x2="270" y2="110" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="430" y1="110" x2="180" y2="225" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="180" y1="275" x2="420" y2="275" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="420" y1="250" x2="420" y2="305" stroke="#333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="425" y="290" class="small" fill="#7d6608">egress only</text>
+
+  <!-- ALB to private subnet -->
+  <line x1="270" y1="385" x2="490" y2="385" stroke="#c0392b" stroke-width="2" marker-end="url(#arrowred)" stroke-dasharray="5 3"/>
+  <text x="370" y="400" text-anchor="middle" class="small" fill="#c0392b">HTTP (internal)</text>
+
+  <!-- Private to isolated -->
+  <line x1="920" y1="385" x2="940" y2="385" stroke="#c0392b" stroke-width="2" marker-end="url(#arrowred)"/>
+  <text x="930" y="400" text-anchor="middle" class="small" fill="#c0392b">via RDS Proxy</text>
+</svg>
