@@ -52,6 +52,11 @@ output "rds_security_group_id" {
   value       = aws_security_group.rds.id
 }
 
+output "rds_proxy_security_group_id" {
+  description = "ID of the RDS Proxy security group. Consumed by U7 (to tighten ingress from the ECS task SG) and by runbook cross-references."
+  value       = aws_security_group.rds_proxy.id
+}
+
 output "rds_subnet_group_name" {
   description = "Name of the DB subnet group."
   value       = aws_db_subnet_group.rds.name

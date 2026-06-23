@@ -87,6 +87,15 @@ hard-fail-on:
   - CKV2_AWS_11   # VPC flow logging enabled (U3 / R4)
   - CKV_AWS_91    # ALB access logs enabled (U3 -> U6 migration; see alb.tf)
   - CKV_AWS_338   # GuardDuty enabled (U5 / R13, C8)
+  # U7 additions -- compute plane.
+  - CKV_AWS_163   # ECS task definition log group uses KMS CMK (the
+                  # CWL CMK is attached to the log group in cluster.tf
+                  # + task.tf; the task definition points at the
+                  # pre-created group, so this gate passes)
+  - CKV_AWS_339   # ECS task definition read-only root filesystem
+                  # (set in task.tf: readonlyRootFilesystem = true)
+  - CKV_AWS_173   # ECR image scanning on push (set in ecr.tf:
+                  # image_scanning_configuration.scan_on_push = true)
 
 # Soft-fail: surface findings in PR but do not block merge. Used while
 # the team is still learning a new rule.

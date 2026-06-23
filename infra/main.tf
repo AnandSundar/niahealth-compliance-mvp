@@ -367,3 +367,88 @@ module "data" {
 
   tags = var.tags
 }
+
+# ---------------------------------------------------------------------------
+# Compute (U7): ECS Fargate + Cognito + ECR + sample app.
+# The compute module owns the runtime plane:
+#   - ECR repository (image registry; immutable, scanning on push)
+#   - ECS Fargate cluster + service + task definition
+#   - Cognito User Pool + User Pool Client + clinicians group
+#   - IAM roles for the task (execution + runtime)
+#   - ALB target group + listener rule wiring routes to Fargate
+#
+# Depends on:
+#   - security  : s3_phi CMK (ECR), cwl CMK (log groups), cognito
+#                 client secret (passed to the container as an env
+#                 var via the task definition's `secrets` block).
+#   - networking: VPC ID (SGs, target group), isolated subnets
+#                 (Fargate task placement).
+#   - edge      : ALB SG (ECS task SG ingress), ALB listener ARN
+#                 (listener rule attachment), ALB DNS name (app URL).
+#   - data      : RDS Proxy endpoint (RDS_PROXY_ENDPOINT env var),
+#                 data bucket name (reserved; not used in MVP),
+#                 RDS SG IDs (passed but the actual SG tightening
+#                 is a U6 follow-up; the compute module's task
+#                 role is the canonical consumer).
+#   - observability: audit bucket name (AUDIT_BUCKET_NAME env var).
+#   - identity  : service boundary (task role permissions boundary).
+# ---------------------------------------------------------------------------
+module "compute" {
+  source = "./modules/compute"
+
+  region       = var.region
+  environment  = var.environment
+  project_name = var.project_name
+
+  # Network placement. The ECS tasks run in isolated subnets
+  # (no NAT, no IGW) -- the same tier as the RDS instance and
+  # the RDS Proxy. Tasks reach AWS services via the VPC
+  # endpoints (Secrets Manager, ECR, KMS, CloudWatch Logs)
+  # created by the networking module.
+  vpc_id              = module.networking.vpc_id
+  isolated_subnet_ids = module.networking.isolated_subnet_ids
+
+  # Edge wiring. The ECS task SG accepts ingress from the ALB
+  # SG; the listener rule attaches to the ALB's HTTPS listener.
+  alb_security_group_id = module.edge.alb_security_group_id
+  alb_listener_arn      = module.edge.alb_listener_https_arn
+  alb_dns_name          = module.edge.alb_dns_name
+
+  # CMKs. The s3_phi CMK encrypts the ECR repo (image encryption
+  # domain stays consistent with the data the image processes);
+  # the CWL CMK encrypts the ECS cluster + app log groups.
+  s3_phi_kms_key_arn = module.security.s3_phi_kms_key_arn
+  cwl_kms_key_arn    = module.security.cwl_kms_key_arn
+
+  # Data plane. The app connects to the RDS Proxy (NOT the RDS
+  # instance directly); the data_ingest role is reserved for a
+  # future ingest path. The RDS SG IDs are passed for the
+  # tightening follow-up; the compute module's task role is
+  # the canonical consumer of the rds-db:connect permission.
+  rds_proxy_endpoint          = module.data.rds_proxy_endpoint
+  rds_db_name                 = module.data.rds_db_name
+  rds_db_user                 = "niahealth_app"
+  rds_proxy_security_group_id = module.data.rds_proxy_security_group_id
+  rds_security_group_id       = module.data.rds_security_group_id
+  s3_phi_bucket_name          = module.data.data_bucket_name
+
+  # Audit log writes. The access-request + delete-my-data routes
+  # write here; this is a DIFFERENT bucket from the data-tier
+  # PHI bucket (which the data_ingest role covers).
+  audit_bucket_name = module.observability.audit_bucket_name
+
+  # Secrets. The Cognito client secret is passed to the
+  # container as the COGNITO_CLIENT_SECRET env var via the task
+  # definition's `secrets` block -- never baked into the image.
+  cognito_client_secret_arn = module.security.cognito_client_secret_arn
+
+  # Identity. The U4 service boundary is attached to the U7
+  # task role (same blast-radius cap as the other service
+  # roles). The U4 ecs_task_role is passed for cross-module
+  # auditability only; U7 has its own task role with the
+  # same boundary.
+  ecs_task_role_arn    = module.identity.ecs_task_role_arn
+  service_boundary_arn = module.identity.service_boundary_arn
+
+  tags = var.tags
+}

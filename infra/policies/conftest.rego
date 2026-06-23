@@ -89,6 +89,12 @@ taggable_resource_types := {
   # U6 additions -- data tier.
   "aws_rds_proxy",
   "aws_security_group",
+  # U7 additions -- compute plane.
+  "aws_cognito_user_pool_client",
+  "aws_cognito_user_group",
+  "aws_appautoscaling_target",
+  "aws_appautoscaling_policy",
+  "aws_lb_listener_rule",
 }
 
 # Allowlist of resource types that genuinely do not support tags and
