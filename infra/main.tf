@@ -29,6 +29,12 @@ variable "region" {
   default     = "ca-central-1"
 }
 
+variable "dr_region" {
+  description = "AWS region for the cross-region replica of the PHI S3 bucket (U6). Default ca-west-1 (the second Canadian region; same data-residency envelope as ca-central-1, satisfying R1 + PIPEDA Schedule 1 + PHIPA s.13)."
+  type        = string
+  default     = "ca-west-1"
+}
+
 variable "environment" {
   description = "Deployment environment name. One of: dev, staging, prod."
   type        = string
@@ -90,6 +96,27 @@ variable "tags" {
     Project    = "niahealth-compliance-mvp"
     ManagedBy  = "terraform"
     CostCenter = "eng-compliance"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Provider alias for the DR region (U6). The data module's
+# lifecycle.tf declares the cross-region replica resources under
+# `provider = aws.dr` so Terraform knows to route those calls to
+# the DR region. The provider inherits the default_tags block from
+# the unaliased provider below; default_tags apply per-provider
+# in the v5 provider, so we redeclare the block here.
+# ---------------------------------------------------------------------------
+provider "aws" {
+  alias  = "dr"
+  region = var.dr_region
+
+  default_tags {
+    tags = {
+      Environment = "dev"
+      DataClass   = "phi"
+      Owner       = "niahealth-eng"
+    }
   }
 }
 
@@ -273,6 +300,70 @@ module "observability" {
   # paged on Critical/High Security Hub findings.
   firehose_role_arn    = module.identity.firehose_role_arn
   paging_sns_topic_arn = module.identity.paging_sns_topic_arn
+
+  tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
+# Data (U6): RDS Postgres + RDS Proxy + S3 PHI bucket + cross-
+# region replication + data-ingest IAM role. The data tier is
+# the most security-relevant plane: PHI lives here. Every input
+# to this module is wired from a module whose blast radius is
+# bounded by an explicit deny (see modules/data/variables.tf for
+# the cross-module seam map).
+#
+# Depends on:
+#   - `security`     : rds CMK (RDS storage encryption), s3_phi
+#                       CMK (PHI bucket encryption), cwl CMK
+#                       (RDS log group encryption), rds-master-
+#                       password secret ARN (RDS Proxy auth).
+#   - `networking`   : VPC ID (RDS / RDS Proxy SGs), database
+#                       subnets (RDS subnet group + RDS Proxy
+#                       placement), isolated subnets (RDS SG
+#                       ingress placeholder; U7 tightens).
+#   - `identity`     : rds-proxy-role ARN (Proxy IAM auth),
+#                       ecs-task-role ARN (reserved for U7;
+#                       carries through for auditability),
+#                       service-boundary ARN (data-ingest-role
+#                       permissions boundary).
+# ---------------------------------------------------------------------------
+module "data" {
+  source = "./modules/data"
+
+  # Provider passthroughs. The data module's lifecycle.tf declares
+  # the cross-region replica resources under `provider = aws.dr`;
+  # the alias must be passed in from the root so Terraform can
+  # resolve it. Without these provider passthroughs, validate
+  # fails with "Provider configuration not present".
+  providers = {
+    aws    = aws
+    aws.dr = aws.dr
+  }
+
+  region       = var.region
+  dr_region    = var.dr_region
+  environment  = var.environment
+  project_name = var.project_name
+
+  # Network placement. The networking module exposes one "no-NAT,
+  # no-IGW" subnet tier (isolated_subnet_ids, mapped from vpc.
+  # database_subnets). Both the RDS instance + RDS Proxy and the
+  # ECS task SG ingress use this same tier; U7 tightens the RDS
+  # SG ingress to the ECS task SG specifically.
+  vpc_id              = module.networking.vpc_id
+  database_subnet_ids = module.networking.isolated_subnet_ids
+  isolated_subnet_ids = module.networking.isolated_subnet_ids
+
+  # CMKs from the security module.
+  rds_kms_key_arn    = module.security.rds_kms_key_arn
+  s3_phi_kms_key_arn = module.security.s3_phi_kms_key_arn
+  cwl_kms_key_arn    = module.security.cwl_kms_key_arn
+
+  # Identity / secrets.
+  rds_proxy_role_arn             = module.identity.rds_proxy_role_arn
+  ecs_task_role_arn              = module.identity.ecs_task_role_arn
+  rds_master_password_secret_arn = module.security.rds_master_password_secret_arn
+  service_boundary_arn           = module.identity.service_boundary_arn
 
   tags = var.tags
 }

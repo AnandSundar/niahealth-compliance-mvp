@@ -68,6 +68,10 @@ skip-check:
 hard-fail-on:
   - CKV_AWS_18    # S3 public access block (C1, C18)
   - CKV_AWS_16    # RDS storage encryption (C1)
+  - CKV_AWS_17    # RDS publicly accessible (R3 / R7)
+  - CKV_AWS_118   # RDS enhanced monitoring enabled (U6 / R12)
+  - CKV_AWS_157   # RDS enhanced monitoring at 15s (U6 / R12; CKV_AWS_118 ensures the role, CKV_AWS_157 ensures the interval)
+  - CKV_AWS_226   # RDS query logging enabled (U6 / R12; the postgresql + upgrade CloudWatch Logs exports)
   - CKV_AWS_36    # CloudTrail encryption (C5)
   - CKV_AWS_53    # S3 block_public_acls (C1, C18)
   - CKV_AWS_54    # S3 block_public_policy (C1, C18)

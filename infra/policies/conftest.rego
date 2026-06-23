@@ -86,6 +86,9 @@ taggable_resource_types := {
   "aws_config_config_rule",
   "aws_macie2_account",
   "aws_kinesis_firehose_delivery_stream",
+  # U6 additions -- data tier.
+  "aws_rds_proxy",
+  "aws_security_group",
 }
 
 # Allowlist of resource types that genuinely do not support tags and
