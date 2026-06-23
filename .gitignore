@@ -1,0 +1,64 @@
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraform.tfstate.lock.info
+
+# Local env / secrets
+.env
+.env.local
+*.pem
+*.key
+secrets/
+gitleaks-report.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Python (U7)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Build artifacts
+dist/
+build/
+*.egg
+
+# OS
+Desktop.ini
+$RECYCLE.BIN/
+
+# Rendered plan outputs (sanitized plan goes to docs/architecture/ instead)
+infra/**/plan-output.txt
+infra/**/tfplan
+infra/**/tfplan-binary
+infra/**/*.sarif
+
+# Worktrees
+.worktrees/
