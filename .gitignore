@@ -16,6 +16,15 @@ override.tf.json
 *_override.tf.json
 .terraform.tfstate.lock.info
 
+# envs/*.tfvars is the per-environment variable file (dev, staging,
+# prod). They are NOT secrets -- they hold region, CIDR, domain --
+# but the .gitignore blocks tfvars by default as a defense against
+# accidental secret commits. The negation below whitelists the
+# committed envs/ directory. A future per-environment secret
+# (e.g. an admin password) would live in a different file
+# (e.g. secrets/<env>.tfvars) that stays gitignored.
+!infra/envs/*.tfvars
+
 # Local env / secrets
 .env
 .env.local

@@ -40,9 +40,9 @@ required_tags := {"Environment", "DataClass", "Owner"}
 # warn rule below for any new resource type that declares `tags` but
 # is not in the allowlist.
 #
-# This list is intentionally a starting set; U3+ will add resource
-# types (aws_kms_key, aws_s3_bucket, aws_db_instance, ...) as they
-# enter the codebase.
+# This list grows explicitly as new resource types enter the
+# codebase. U2 added the initial 22; U3 added the 7 below for the
+# network + edge plane (U3 plan call-out).
 taggable_resource_types := {
   "aws_iam_role",
   "aws_iam_policy",
@@ -56,6 +56,13 @@ taggable_resource_types := {
   "aws_rds_cluster",
   "aws_lb",
   "aws_lb_target_group",
+  "aws_cloudwatch_log_group",
+  "aws_wafv2_web_acl",
+  "aws_acm_certificate",
+  "aws_vpc_endpoint",
+  "aws_route_table",
+  "aws_internet_gateway",
+  "aws_nat_gateway",
   "aws_cloudtrail",
   "aws_config_configuration_recorder",
   "aws_guardduty_detector",

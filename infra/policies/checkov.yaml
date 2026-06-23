@@ -43,19 +43,45 @@ skip-check:
 # access, or audit posture is non-negotiable. These IDs are the
 # control IDs from CONTROLS.md (U9) -- the control matrix is the
 # single source of truth, the IDs here are a duplicate for the gate.
+#
+# Note on the network-plane IDs (U3):
+#   - CKV_AWS_2  : ALB listener protocol is HTTPS. (The plan's
+#                  intended ID was CKV_AWS_91 but that one is for
+#                  access logs -- verified against Checkov 3.2.x.
+#                  CKV_AWS_2 is the right rule for the "HTTPS only"
+#                  requirement. The HTTP->HTTPS redirect in alb.tf
+#                  means the HTTP listener does NOT trigger this
+#                  rule -- only the production HTTPS listener does,
+#                  which is the correct posture.)
+#   - CKV2_AWS_11: VPC flow logging enabled. (The plan called this
+#                  CKV_AWS_91 but that ID is for ALB access logs;
+#                  CKV2_AWS_11 is the actual VPC flow log check.)
+#   - CKV_AWS_91 : ALB access logs enabled. (Deferred to U6 when the
+#                  data-tier S3 bucket lands; included here so a
+#                  future apply that turns the access_logs knob on
+#                  still passes this gate.)
+#   - CKV_AWS_103: ALB listener uses TLS 1.2+. (The plan's intended
+#                  ID was CKV_AWS_170 but that one is for QLDB
+#                  ledgers; CKV_AWS_103 is the actual ALB TLS
+#                  version rule. We pin the listener to
+#                  ELBSecurityPolicy-TLS13-1-2-2021-06 in alb.tf.)
 hard-fail-on:
-  - CKV_AWS_18   # S3 public access block (C1, C18)
-  - CKV_AWS_16   # RDS storage encryption (C1)
-  - CKV_AWS_36   # CloudTrail encryption (C5)
-  - CKV_AWS_53   # S3 block_public_acls (C1, C18)
-  - CKV_AWS_54   # S3 block_public_policy (C1, C18)
-  - CKV_AWS_55   # S3 ignore_public_acls (C1, C18)
-  - CKV_AWS_56   # S3 restrict_public_buckets (C1, C18)
-  - CKV_AWS_49   # IAM policy attached directly to user (C4)
-  - CKV_AWS_61   # IAM AssumeRole policy allows public access (C4)
-  - CKV_AWS_107  # IAM role allows public AssumeRole (C4)
-  - CKV_AWS_158  # RDS public access
-  - CKV_AWS_354  # S3 lifecycle configuration
+  - CKV_AWS_18    # S3 public access block (C1, C18)
+  - CKV_AWS_16    # RDS storage encryption (C1)
+  - CKV_AWS_36    # CloudTrail encryption (C5)
+  - CKV_AWS_53    # S3 block_public_acls (C1, C18)
+  - CKV_AWS_54    # S3 block_public_policy (C1, C18)
+  - CKV_AWS_55    # S3 ignore_public_acls (C1, C18)
+  - CKV_AWS_56    # S3 restrict_public_buckets (C1, C18)
+  - CKV_AWS_49    # IAM policy attached directly to user (C4)
+  - CKV_AWS_61    # IAM AssumeRole policy allows public access (C4)
+  - CKV_AWS_107   # IAM role allows public AssumeRole (C4)
+  - CKV_AWS_158   # RDS public access
+  - CKV_AWS_354   # S3 lifecycle configuration
+  - CKV_AWS_2     # ALB listener protocol is HTTPS (U3 / R3)
+  - CKV_AWS_103   # ALB listener uses TLS 1.2+ (U3 / R3)
+  - CKV2_AWS_11   # VPC flow logging enabled (U3 / R4)
+  - CKV_AWS_91    # ALB access logs enabled (U3 -> U6 migration; see alb.tf)
 
 # Soft-fail: surface findings in PR but do not block merge. Used while
 # the team is still learning a new rule.
