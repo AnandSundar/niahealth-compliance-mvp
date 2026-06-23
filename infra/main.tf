@@ -8,6 +8,10 @@
 # permission sets, per-service IAM roles with permission boundaries,
 # the single break-glass IAM user, IAM Access Analyzer, Secrets
 # Manager secrets, and rotation.
+# U5 adds the observability plane (`observability`): CloudTrail,
+# AWS Config, GuardDuty, Security Hub, Macie, and the central
+# Kinesis Firehose that fans VPC Flow Logs + ALB/WAF logs into the
+# immutable audit S3 bucket.
 #
 # Module layout follows Anton Babenko's convention: each layer is a
 # self-contained subdirectory under modules/ with main/variables/
@@ -213,6 +217,62 @@ module "identity" {
   # to these ARNs.
   rds_master_password_secret_arn = module.security.rds_master_password_secret_arn
   cognito_client_secret_arn      = module.security.cognito_client_secret_arn
+
+  tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
+# Observability (U5): CloudTrail, AWS Config, GuardDuty, Security
+# Hub, Macie, and the central Kinesis Firehose that fans VPC Flow
+# Logs + ALB/WAF logs into the immutable audit S3 bucket.
+#
+# Depends on:
+#   - `security` for the 4 CMK ARNs (cloudtrail + cwl for log
+#     encryption; s3_phi for completeness).
+#   - `networking` for the VPC Flow Logs CloudWatch log group
+#     ARN (the subscription filter fans those logs into Firehose).
+#   - `edge` for the ALB ARN and WAF WebACL ARN (reserved for
+#     U6/U7 access-log wiring; the values are not consumed by U5
+#     but the module signature requires them).
+#   - `identity` for the Firehose IAM role ARN (assumed by
+#     Firehose when delivering to the audit bucket) and the
+#     paging SNS topic ARN (Critical/High Security Hub findings).
+# ---------------------------------------------------------------------------
+module "observability" {
+  source = "./modules/observability"
+
+  region       = var.region
+  environment  = var.environment
+  project_name = var.project_name
+
+  # 3 CMK ARNs from the security module. cloudtrail + cwl are
+  # consumed; s3_phi is carried for completeness (the audit
+  # bucket uses the cloudtrail CMK by design so PHI cannot
+  # pivot through the audit CMK).
+  cloudtrail_kms_key_arn = module.security.cloudtrail_kms_key_arn
+  cwl_kms_key_arn        = module.security.cwl_kms_key_arn
+  s3_phi_kms_key_arn     = module.security.s3_phi_kms_key_arn
+
+  # VPC Flow Log group ARN from the networking module. The
+  # subscription filter on this log group is the load-bearing
+  # piece that gets the flow logs into the central Firehose
+  # for archive in the audit bucket.
+  vpc_flow_log_group_arn = module.networking.vpc_flow_log_destination_arn
+
+  # ALB + WAF ARNs from the edge module. Not consumed by U5
+  # (U5 does not create new log groups for ALB/WAF; it expects
+  # those groups to be created by U6/U7). The variables are
+  # passed so the module signature is consistent and U6/U7
+  # can add the access-log wiring in a follow-up.
+  alb_arn         = module.edge.alb_arn
+  waf_web_acl_arn = module.edge.waf_web_acl_arn
+
+  # Firehose IAM role ARN + paging SNS topic ARN from the
+  # identity module. The Firehose role is assumed when
+  # Firehose delivers to the audit bucket; the SNS topic is
+  # paged on Critical/High Security Hub findings.
+  firehose_role_arn    = module.identity.firehose_role_arn
+  paging_sns_topic_arn = module.identity.paging_sns_topic_arn
 
   tags = var.tags
 }

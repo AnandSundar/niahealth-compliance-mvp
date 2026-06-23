@@ -82,6 +82,7 @@ hard-fail-on:
   - CKV_AWS_103   # ALB listener uses TLS 1.2+ (U3 / R3)
   - CKV2_AWS_11   # VPC flow logging enabled (U3 / R4)
   - CKV_AWS_91    # ALB access logs enabled (U3 -> U6 migration; see alb.tf)
+  - CKV_AWS_338   # GuardDuty enabled (U5 / R13, C8)
 
 # Soft-fail: surface findings in PR but do not block merge. Used while
 # the team is still learning a new rule.

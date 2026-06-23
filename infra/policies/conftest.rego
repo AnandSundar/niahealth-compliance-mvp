@@ -82,6 +82,10 @@ taggable_resource_types := {
   "aws_accessanalyzer_analyzer",
   "aws_sns_topic",
   "aws_cloudwatch_event_rule",
+  # U5 additions -- security + audit plane.
+  "aws_config_config_rule",
+  "aws_macie2_account",
+  "aws_kinesis_firehose_delivery_stream",
 }
 
 # Allowlist of resource types that genuinely do not support tags and
