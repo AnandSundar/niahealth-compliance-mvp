@@ -1,0 +1,78 @@
+# Checkov configuration for the NiaHealth compliance reference architecture.
+#
+# We use the built-in "terraform" framework, which already covers
+# the BC_AWS_GENERAL_https + BC_AWS_HIPAA controls (CIS HTTPS, RDS
+# encryption, S3 public access, IAM policy attachment, etc.) under
+# the "terraform" framework name. Hard-fail rules below pin the
+# controls that are non-negotiable for the PHIPA / PIPEDA / Quebec
+# Law 25 control set; everything else is surfaced as a soft-fail
+# finding that does not block merge.
+#
+# Skip rules: each entry MUST include a documented justification in
+# `run-integration` or a code comment. Do not blanket-skip rules; if
+# a Checkov finding is real, fix the resource, do not silence the
+# scanner.
+
+# Framework selection.
+#   - terraform : all CKV_AWS_* rules
+#   - secrets   : detect accidentally committed secrets
+framework:
+  - secrets
+  - terraform
+
+# Resource skip list. Each entry: a Checkov check ID plus a justification
+# bound to the exact module or file where the skip is intentional. When
+# U3+ adds real resources, this list should grow -- not shrink.
+skip-check:
+  # CKV_TF_1 demands a commit hash, not a tag. The plan deliberately
+  # pins external modules to a tag (e.g. ?ref=v5.50.0) so the supply-
+  # chain surface is human-reviewable in PRs. A commit hash would be
+  # stricter, but it would also break the convention used by every
+  # other consumer of terraform-aws-modules. Re-evaluate when the
+  # module adds a commit-hash release artifact.
+  # Justification: pinning by version tag (?ref=v5.50.0) per the plan's
+  # supply-chain policy; commit-hash pinning is a follow-up.
+  - CKV_TF_1
+
+  # No other skips yet. The landing module currently creates only an
+  # OIDC provider and a deploy role; both pass the CKV_AWS_* rules
+  # cleanly. Add new skips below as a flat list of check IDs; put
+  # the justification in a code comment immediately above the entry.
+
+# Hard-fail: block merge. Anything that touches encryption, public
+# access, or audit posture is non-negotiable. These IDs are the
+# control IDs from CONTROLS.md (U9) -- the control matrix is the
+# single source of truth, the IDs here are a duplicate for the gate.
+hard-fail-on:
+  - CKV_AWS_18   # S3 public access block (C1, C18)
+  - CKV_AWS_16   # RDS storage encryption (C1)
+  - CKV_AWS_36   # CloudTrail encryption (C5)
+  - CKV_AWS_53   # S3 block_public_acls (C1, C18)
+  - CKV_AWS_54   # S3 block_public_policy (C1, C18)
+  - CKV_AWS_55   # S3 ignore_public_acls (C1, C18)
+  - CKV_AWS_56   # S3 restrict_public_buckets (C1, C18)
+  - CKV_AWS_49   # IAM policy attached directly to user (C4)
+  - CKV_AWS_61   # IAM AssumeRole policy allows public access (C4)
+  - CKV_AWS_107  # IAM role allows public AssumeRole (C4)
+  - CKV_AWS_158  # RDS public access
+  - CKV_AWS_354  # S3 lifecycle configuration
+
+# Soft-fail: surface findings in PR but do not block merge. Used while
+# the team is still learning a new rule.
+soft-fail-on: []
+
+# Output: SARIF for native GitHub Code Scanning integration
+# (see plan U8, infra/.github/workflows/plan.yml). When run locally,
+# also produce a human-readable CLI summary.
+output:
+  - cli
+  - sarif
+
+# Download external framework definitions at runtime. CI uses
+# --skip-download to make builds hermetic; local dev can drop the
+# flag.
+download-external-modules: true
+evaluate-variables: true
+
+# Compact output for the CLI channel (the SARIF channel stays verbose).
+compact: true

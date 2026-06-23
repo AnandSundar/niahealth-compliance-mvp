@@ -4,6 +4,8 @@
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+!.terraform.lock.hcl
+.external_modules/
 crash.log
 crash.*.log
 *.tfvars
