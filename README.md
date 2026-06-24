@@ -4,6 +4,16 @@
 
 ---
 
+<p align="center">
+  <img src="docs/promo/niahealth-compliance-mvp.gif" alt="NiaHealth Compliance MVP — artifact montage: 15 controls, 4 KMS keys, immutable audit bucket, 3 AM runbook" width="720">
+</p>
+
+<p align="center">
+  <em>The artifact montage: the same primitives a regulator would audit, demonstrated as a terminal session — <code>wc -l</code> on the security controls, <code>aws kms list-keys</code>, an <code>s3api get-bucket-policy</code> that returns <code>"Deny"</code> for <code>root@*</code>, and the first line of the breach runbook.</em>
+</p>
+
+---
+
 ## 30-second elevator pitch
 
 A Toronto-based HealthTech handling Ontario + Quebec residents' personal health information needs a cloud architecture that satisfies three Canadian privacy frameworks (PHIPA, PIPEDA, Quebec Law 25) **at the same time**. This repo is the reference architecture for that requirement: a single AWS account in `ca-central-1` with four customer-managed KMS keys (one per blast-radius domain), private/isolated subnets with no PHI-egress to the public internet, an RDS Postgres + RDS Proxy data tier with IAM auth and TLS-only connections, an ECS Fargate sample app behind an ALB + WAFv2, an immutable audit bucket with 7-year Object Lock retention, and a 15-control matrix that does the Canadian-framework cross-walk that AWS itself has not published. The repo also includes a regulator-ready incident response runbook for the canonical RDS-snapshot-leak scenario, with IPC, OPC, and CAI notification templates ready to copy-paste. **The architecture is real Terraform; the runbook is the kind you could walk through at 3 AM on day 1 of the job; the control matrix is the kind of artifact a regulator could audit by `cat`-ing one file per control.**
